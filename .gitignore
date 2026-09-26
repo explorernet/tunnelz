@@ -1,0 +1,12 @@
+.DS_Store
+# Xcode
+xcuserdata/
+DerivedData/
+build/
+*.xcarchive
+
+# Signing material must never be committed
+*.p12
+*.p8
+*.cer
+sparkle_private_key*

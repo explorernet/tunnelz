@@ -1,0 +1,174 @@
+name: Release
+
+# Push a tag like v1.2.0 to build, sign, notarize and publish a release with its Sparkle appcast.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-26
+    env:
+      HAS_SIGNING: ${{ secrets.DEVELOPER_ID_P12_BASE64 != '' }}
+      HAS_NOTARY: ${{ secrets.NOTARY_KEY_P8_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+
+      - name: Version from tag
+        run: |
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+
+      - name: Check Sparkle key
+        env:
+          SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SPARKLE_PUBLIC_KEY" ] || [ -z "$SPARKLE_PRIVATE_KEY" ]; then
+            echo "::error::Set the SPARKLE_PUBLIC_KEY variable and SPARKLE_PRIVATE_KEY secret (see RELEASING.md)."
+            exit 1
+          fi
+
+      - name: Import Developer ID certificate
+        if: env.HAS_SIGNING == 'true'
+        env:
+          P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(uuidgen)
+          echo "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+
+      - name: Archive
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+        run: |
+          if [ "$HAS_SIGNING" = "true" ]; then
+            SIGNING=(CODE_SIGN_STYLE=Manual "CODE_SIGN_IDENTITY=Developer ID Application" DEVELOPMENT_TEAM="$TEAM_ID" "OTHER_CODE_SIGN_FLAGS=--timestamp --options=runtime")
+          else
+            echo "::warning::No Developer ID secrets: building an ad-hoc signed app that Gatekeeper will block on first open."
+            SIGNING=(CODE_SIGN_STYLE=Manual "CODE_SIGN_IDENTITY=-" DEVELOPMENT_TEAM="")
+          fi
+          xcodebuild archive \
+            -project Tunnelz.xcodeproj \
+            -scheme Tunnelz \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -archivePath build/Tunnelz.xcarchive \
+            -clonedSourcePackagesDirPath build/SourcePackages \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            SPARKLE_PUBLIC_KEY="$SPARKLE_PUBLIC_KEY" \
+            SPARKLE_FEED_URL="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/appcast.xml" \
+            "${SIGNING[@]}"
+
+      - name: Export app
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          mkdir -p build/export
+          if [ "$HAS_SIGNING" = "true" ]; then
+            cat > build/ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>developer-id</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>Developer ID Application</string>
+            <key>teamID</key><string>${TEAM_ID}</string>
+          </dict>
+          </plist>
+          EOF
+            xcodebuild -exportArchive \
+              -archivePath build/Tunnelz.xcarchive \
+              -exportPath build/export \
+              -exportOptionsPlist build/ExportOptions.plist
+          else
+            cp -R build/Tunnelz.xcarchive/Products/Applications/Tunnelz.app build/export/
+          fi
+          codesign --verify --deep --strict --verbose=2 build/export/Tunnelz.app
+
+      - name: Notarize app
+        if: env.HAS_SIGNING == 'true' && env.HAS_NOTARY == 'true'
+        env:
+          P8_BASE64: ${{ secrets.NOTARY_KEY_P8_BASE64 }}
+          KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          echo "$P8_BASE64" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          ditto -c -k --keepParent build/export/Tunnelz.app build/Tunnelz-notarize.zip
+          xcrun notarytool submit build/Tunnelz-notarize.zip \
+            --key "$RUNNER_TEMP/notary.p8" --key-id "$KEY_ID" --issuer "$ISSUER_ID" --wait
+          xcrun stapler staple build/export/Tunnelz.app
+
+      - name: Build DMG
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          mkdir -p build/dmg build/updates
+          cp -R build/export/Tunnelz.app build/dmg/
+          ln -s /Applications build/dmg/Applications
+          DMG="build/updates/Tunnelz-${VERSION}.dmg"
+          hdiutil create -volname Tunnelz -srcfolder build/dmg -ov -format UDZO "$DMG"
+          if [ "$HAS_SIGNING" = "true" ]; then
+            codesign --sign "Developer ID Application" --timestamp "$DMG"
+          fi
+          echo "DMG=$DMG" >> "$GITHUB_ENV"
+
+      - name: Notarize DMG
+        if: env.HAS_SIGNING == 'true' && env.HAS_NOTARY == 'true'
+        env:
+          KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          xcrun notarytool submit "$DMG" \
+            --key "$RUNNER_TEMP/notary.p8" --key-id "$KEY_ID" --issuer "$ISSUER_ID" --wait
+          xcrun stapler staple "$DMG"
+
+      - name: Generate appcast
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          echo "$SPARKLE_PRIVATE_KEY" | build/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast \
+            --ed-key-file - \
+            --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/" \
+            -o build/updates/appcast.xml \
+            build/updates
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "$DMG" build/updates/appcast.xml \
+            --title "Tunnelz ${VERSION}" \
+            --generate-notes
+
+      - name: Clean up signing material
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/notary.p8"
