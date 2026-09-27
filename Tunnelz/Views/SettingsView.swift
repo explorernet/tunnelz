@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct SettingsView: View {
-    private enum Pane: Hashable { case general, relay, cloudflare, users }
+    private enum Pane: Hashable { case general, relay, cloudflare, users, about }
     @State private var selection: Pane = .general
     @AppStorage(RelayManager.adminTokenKey) private var adminToken = ""
 
@@ -20,6 +20,22 @@ struct SettingsView: View {
                         .tag(Pane.users)
                 }
             }
+            .safeAreaInset(edge: .bottom) {
+                Button { selection = .about } label: {
+                    paneLabel("About", systemImage: "info.circle.fill", color: .gray)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(
+                            selection == .about ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear),
+                            in: RoundedRectangle(cornerRadius: 8)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 10)
+            }
             .toolbar(removing: .sidebarToggle)
             .navigationSplitViewColumnWidth(200)
         } detail: {
@@ -29,6 +45,8 @@ struct SettingsView: View {
                     GeneralSettingsView()
                 case .cloudflare:
                     CloudflaredSettingsView()
+                case .about:
+                    AboutSettingsView()
                 case .users where !adminToken.isEmpty:
                     RelayUsersView()
                 default:
@@ -49,6 +67,7 @@ struct SettingsView: View {
         case .relay: "Relay"
         case .users: "Users"
         case .cloudflare: "Cloudflare"
+        case .about: "About"
         }
     }
 
@@ -70,40 +89,8 @@ private struct GeneralSettingsView: View {
     @AppStorage(AppSettings.maxCapturedBodyKBKey) private var maxCapturedBodyKB = AppSettings.defaultMaxCapturedBodyKB
     @AppStorage(AppSettings.requestHistoryLimitKey) private var requestHistoryLimit = AppSettings.defaultRequestHistoryLimit
     @AppStorage(AppSettings.redactsSensitiveHeadersKey) private var redactsSensitiveHeaders = AppSettings.defaultRedactsSensitiveHeaders
-    @State private var updater = AppUpdater.shared
-
-    private var version: String {
-        let info = Bundle.main.infoDictionary
-        let short = info?["CFBundleShortVersionString"] as? String ?? "?"
-        let build = info?["CFBundleVersion"] as? String ?? "?"
-        return "\(short) (\(build))"
-    }
-
     var body: some View {
         Form {
-            Section {
-                LabeledContent("Version") {
-                    HStack(spacing: 10) {
-                        Text(version)
-                        if updater.isAvailable {
-                            Button("Check for Updates…") { updater.checkForUpdates() }
-                        }
-                    }
-                }
-                if updater.isAvailable {
-                    Toggle("Check for Updates Automatically", isOn: Binding(
-                        get: { updater.automaticallyChecksForUpdates },
-                        set: { updater.automaticallyChecksForUpdates = $0 }
-                    ))
-                }
-            } header: {
-                Text("Tunnelz")
-            } footer: {
-                if !updater.isAvailable {
-                    Text("Updates are available in release builds.")
-                }
-            }
-
             Section {
                 Picker("Maximum Request Size", selection: $maxRequestBodyMB) {
                     ForEach([10, 50, 100, 500, 1_024], id: \.self) { value in
@@ -139,6 +126,65 @@ private struct GeneralSettingsView: View {
                 Text("Privacy")
             } footer: {
                 Text("Authorization, Cookie, Set-Cookie and X-Api-Key values are masked before being stored. Replaying those requests will not include them.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+private struct AboutSettingsView: View {
+    private static let repositoryURL = URL(string: "https://github.com/explorernet/tunnelz")!
+
+    private var version: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "\(short) (\(build))"
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                VStack(spacing: 4) {
+                    Image(nsImage: NSApp.applicationIconImage)
+                        .resizable()
+                        .frame(width: 64, height: 64)
+                    Text("Tunnelz")
+                        .font(.title2.bold())
+                    Text(version)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    Text("© \(Date.now.formatted(.dateTime.year())) Explorer Software Ltda.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+            }
+
+            Section {
+                Label("No analytics, no tracking, no account.", systemImage: "hand.raised.fill")
+            } header: {
+                Text("Privacy")
+            } footer: {
+                Text("Tunnelz collects nothing. Captured requests and settings stay on this Mac. The only connections it makes on its own are update checks to GitHub, and those send no data about you.")
+            }
+
+            Section("Links") {
+                Link(destination: Self.repositoryURL) {
+                    LabeledContent {
+                        Image(systemName: "arrow.up.right")
+                    } label: {
+                        Label {
+                            Text("GitHub")
+                        } icon: {
+                            Image("GitHub")
+                                .resizable()
+                                .frame(width: 16, height: 16)
+                        }
+                    }
+                }
+                .foregroundStyle(.primary)
             }
         }
         .formStyle(.grouped)

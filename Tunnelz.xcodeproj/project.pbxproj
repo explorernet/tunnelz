@@ -297,7 +297,7 @@
 				PRODUCT_NAME = Tunnelz;
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
-				SPARKLE_FEED_URL = "https://github.com/wildsonc/inspector/releases/latest/download/appcast.xml";
+				SPARKLE_FEED_URL = "https://github.com/explorernet/tunnelz/releases/latest/download/appcast.xml";
 				SPARKLE_PUBLIC_KEY = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = macosx;
@@ -339,7 +339,7 @@
 				PRODUCT_NAME = Tunnelz;
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
-				SPARKLE_FEED_URL = "https://github.com/wildsonc/inspector/releases/latest/download/appcast.xml";
+				SPARKLE_FEED_URL = "https://github.com/explorernet/tunnelz/releases/latest/download/appcast.xml";
 				SPARKLE_PUBLIC_KEY = "";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = macosx;
