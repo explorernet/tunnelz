@@ -168,7 +168,7 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" \
               "$DMG" build/updates/appcast.xml \
-              --title "Tunnelz ${VERSION}" \
+              --title "${VERSION}" \
               --generate-notes
           fi
 
