@@ -73,19 +73,36 @@ final class TunnelProcessManager {
         capturedRequests[tunnelID, default: []]
     }
 
-    func clearRequests(for tunnelID: UUID) {
+    func clearRequests(for tunnelID: UUID, keepingSaved: Bool = false) {
         guard let modelContext else { return }
+        let all = capturedRequests[tunnelID, default: []]
+        let kept = keepingSaved ? all.filter(\.isSaved) : []
         do {
-            for request in capturedRequests[tunnelID, default: []] {
+            for request in all where !(keepingSaved && request.isSaved) {
                 modelContext.delete(request)
             }
             if modelContext.hasChanges {
                 try modelContext.save()
             }
-            capturedRequests[tunnelID] = []
+            capturedRequests[tunnelID] = kept
         } catch {
             modelContext.rollback()
             historyLogger.error("Could not clear request history: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    func deleteRequests(_ requests: [CapturedRequest]) {
+        guard let modelContext, !requests.isEmpty else { return }
+        let ids = Set(requests.map(\.id))
+        do {
+            requests.forEach(modelContext.delete)
+            try modelContext.save()
+            for (tunnelID, list) in capturedRequests {
+                capturedRequests[tunnelID] = list.filter { !ids.contains($0.id) }
+            }
+        } catch {
+            modelContext.rollback()
+            historyLogger.error("Could not delete requests: \(error.localizedDescription, privacy: .public)")
         }
     }
 

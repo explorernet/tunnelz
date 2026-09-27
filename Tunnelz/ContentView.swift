@@ -19,6 +19,8 @@ struct ContentView: View {
     @State private var methodFilter: Set<String> = []
     @State private var statusFilter: Set<StatusClass> = []
     @State private var showsSavedOnly = false
+    @State private var confirmsClear = false
+    @State private var replayDraft: ReplayRequestDraft?
 
     private var hasActiveFilters: Bool {
         !methodFilter.isEmpty || !statusFilter.isEmpty || showsSavedOnly
@@ -105,6 +107,12 @@ struct ContentView: View {
                     TableColumn("Duration", value: \.durationMilliseconds) { Text($0.duration) }.width(78)
                     TableColumn("Time", value: \.startedAt) { Text($0.time) }.width(78)
                 }
+                .contextMenu(forSelectionType: CapturedRequest.ID.self) { ids in
+                    requestContextMenu(for: requests.filter { ids.contains($0.id) })
+                }
+                .sheet(item: $replayDraft) { draft in
+                    EditReplayView(draft: draft, onReplay: processManager.replay)
+                }
             }
             .searchable(text: $searchText, prompt: "Search requests")
             .inspector(isPresented: $showsInspector) {
@@ -115,13 +123,9 @@ struct ContentView: View {
                     canReplay: selectedRuntime.phase == .running && selectedTunnel?.capturesRequests == true,
                     onReplay: processManager.replay,
                     onReplayEdited: processManager.replay,
-                    onToggleSaved: { request in
-                        request.isSaved.toggle()
-                        try? modelContext.save()
-                        rebuildRows()
-                    }
+                    onToggleSaved: { toggleSaved([$0]) }
                 )
-                    .inspectorColumnWidth(min: 400, ideal: 460, max: 560)
+                    .inspectorColumnWidth(min: 300, ideal: 390, max: 560)
             }
         }
         .toolbar {
@@ -153,13 +157,29 @@ struct ContentView: View {
                     }
                     .help("Edit Tunnel")
                 }
-                Button("Clear All Requests", systemImage: "trash") {
-                    guard let selectedTunnelID else { return }
-                    deleteHistory(for: selectedTunnelID)
-                    selectedRequestID = nil
+                Button("Clear Requests", systemImage: "trash") {
+                    confirmsClear = true
                 }
+                .disabled(selectedTunnelID == nil || requests.isEmpty)
+                .help("Clear Requests")
                 Button("Toggle Inspector", systemImage: "sidebar.trailing") { showsInspector.toggle() }
                 filterMenu
+            }
+        }
+        .confirmationDialog("Clear requests from this tunnel?", isPresented: $confirmsClear) {
+            if requests.contains(where: \.isSaved) {
+                Button("Clear All Except Saved") { clearSelectedTunnel(keepingSaved: true) }
+                    .keyboardShortcut(.defaultAction)
+                Button("Clear All, Including Saved", role: .destructive) { clearSelectedTunnel(keepingSaved: false) }
+            } else {
+                Button("Clear All", role: .destructive) { clearSelectedTunnel(keepingSaved: false) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            if requests.contains(where: \.isSaved) {
+                Text("Saved requests are kept unless you choose to clear them too.")
+            } else {
+                Text("This can't be undone.")
             }
         }
         .onAppear {
@@ -258,6 +278,67 @@ struct ContentView: View {
         }
         modelContext.delete(tunnel)
         try? modelContext.save()
+    }
+
+    private var canReplay: Bool {
+        selectedRuntime.phase == .running && selectedTunnel?.capturesRequests == true
+    }
+
+    @ViewBuilder
+    private func requestContextMenu(for selection: [CapturedRequest]) -> some View {
+        if let request = selection.first, selection.count == 1 {
+            Button(request.isSaved ? "Remove from Saved" : "Save", systemImage: request.isSaved ? "bookmark.slash" : "bookmark") {
+                toggleSaved([request])
+            }
+            Button("Copy as cURL", systemImage: "doc.on.doc") {
+                Pasteboard.copy(CURLCommand.make(for: request, publicURL: selectedRuntime.publicURL, localURL: selectedTunnel?.localURL))
+            }
+            Divider()
+            Button("Edit & Replay…", systemImage: "square.and.pencil") {
+                replayDraft = ReplayRequestDraft(request: request)
+            }
+            .disabled(!canReplay)
+            Button("Replay", systemImage: "arrow.clockwise") {
+                processManager.replay(request)
+            }
+            .disabled(!canReplay)
+            Divider()
+            Button("Delete", systemImage: "trash", role: .destructive) {
+                deleteRequests([request])
+            }
+        } else if !selection.isEmpty {
+            let allSaved = selection.allSatisfy(\.isSaved)
+            Button(allSaved ? "Remove \(selection.count) from Saved" : "Save \(selection.count) Requests",
+                   systemImage: allSaved ? "bookmark.slash" : "bookmark") {
+                toggleSaved(selection)
+            }
+            Divider()
+            Button("Delete \(selection.count) Requests", systemImage: "trash", role: .destructive) {
+                deleteRequests(selection)
+            }
+        }
+    }
+
+    private func toggleSaved(_ selection: [CapturedRequest]) {
+        let newValue = !selection.allSatisfy(\.isSaved)
+        selection.forEach { $0.isSaved = newValue }
+        try? modelContext.save()
+        rebuildRows()
+    }
+
+    private func deleteRequests(_ selection: [CapturedRequest]) {
+        if let selectedRequestID, selection.contains(where: { $0.id == selectedRequestID }) {
+            self.selectedRequestID = nil
+        }
+        processManager.deleteRequests(selection)
+    }
+
+    private func clearSelectedTunnel(keepingSaved: Bool) {
+        guard let selectedTunnelID else { return }
+        processManager.clearRequests(for: selectedTunnelID, keepingSaved: keepingSaved)
+        if let selectedRequestID, !requests.contains(where: { $0.id == selectedRequestID }) {
+            self.selectedRequestID = nil
+        }
     }
 
     private func deleteHistory(for tunnelID: UUID) {

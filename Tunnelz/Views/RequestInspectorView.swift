@@ -46,7 +46,6 @@ struct RequestInspectorView: View {
                 Divider()
                 inspectorFooter(for: request)
             }
-            .frame(minWidth: 400, idealWidth: 460)
             .onChange(of: request.id) {
                 showsAllHeaders = false
                 headersExpanded = false
@@ -60,7 +59,6 @@ struct RequestInspectorView: View {
             }
         } else {
             ContentUnavailableView("No Request Selected", systemImage: "doc.text.magnifyingglass")
-                .frame(minWidth: 300, idealWidth: 360)
         }
     }
 
@@ -313,6 +311,19 @@ struct RequestInspectorView: View {
     }
 
     private func inspectorFooter(for request: CapturedRequest) -> some View {
+        // Labels collapse to icons when the inspector is narrow.
+        ViewThatFits(in: .horizontal) {
+            footerButtons(for: request, iconsOnly: false)
+            footerButtons(for: request, iconsOnly: true)
+        }
+        .controlSize(.small)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+        .background(.bar)
+    }
+
+    private func footerButtons(for request: CapturedRequest, iconsOnly: Bool) -> some View {
         HStack(spacing: 7) {
             Spacer(minLength: 0)
             Button(
@@ -322,58 +333,27 @@ struct RequestInspectorView: View {
                 onToggleSaved(request)
             }
             .help(request.isSaved ? "Remove from saved requests" : "Save this request")
-            Button("Copy as cURL") {
-                Pasteboard.copy(cURLCommand(for: request))
+            Button("Copy as cURL", systemImage: "doc.on.doc") {
+                Pasteboard.copy(CURLCommand.make(for: request, publicURL: publicURL, localURL: tunnel?.localURL))
             }
-            Button("Edit & Replay") {
+            .labelStyle(iconsOnly ? AnyLabelStyle(.iconOnly) : AnyLabelStyle(.titleOnly))
+            .help("Copy as cURL")
+            Button("Edit & Replay", systemImage: "square.and.pencil") {
                 replayDraft = ReplayRequestDraft(request: request)
             }
-                .disabled(!canReplay)
+            .labelStyle(iconsOnly ? AnyLabelStyle(.iconOnly) : AnyLabelStyle(.titleOnly))
+            .help("Edit & Replay")
+            .disabled(!canReplay)
             Button("Replay", systemImage: "arrow.clockwise") {
                 onReplay(request)
             }
-                .disabled(!canReplay)
-                .buttonStyle(.borderedProminent)
+            .help("Replay")
+            .disabled(!canReplay)
+            .buttonStyle(.borderedProminent)
         }
-        .controlSize(.small)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(.bar)
+        .labelStyle(iconsOnly ? AnyLabelStyle(.iconOnly) : AnyLabelStyle(.titleAndIcon))
+        .fixedSize(horizontal: iconsOnly ? false : true, vertical: false)
     }
-
-    private func cURLCommand(for request: CapturedRequest) -> String {
-        var arguments = [
-            "curl",
-            "--request \(shellQuote(request.method))",
-            "--url \(shellQuote(requestURL(path: request.path)))"
-        ]
-
-        for header in request.requestHeaders where !headersOmittedFromCURL.contains(header.name.lowercased()) {
-            arguments.append("--header \(shellQuote("\(header.name): \(header.value)"))")
-        }
-
-        if !request.requestBody.isEmpty,
-           request.method.caseInsensitiveCompare("GET") != .orderedSame,
-           request.method.caseInsensitiveCompare("HEAD") != .orderedSame,
-           let body = String(data: request.requestBody, encoding: .utf8) {
-            arguments.append("--data-raw \(shellQuote(body))")
-        }
-
-        return arguments.joined(separator: " \\\n  ")
-    }
-
-    private func shellQuote(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
-    }
-
-    private var headersOmittedFromCURL: Set<String> {
-        [
-            "connection", "content-length", "host", "keep-alive", "proxy-authenticate",
-            "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade",
-            "x-inspector-replay"
-        ]
-    }
-
 
     private func statusColor(for status: Int) -> Color {
         switch status {
@@ -449,5 +429,17 @@ private struct CheckerboardBackground: View {
                 }
             }
         }
+    }
+}
+
+private struct AnyLabelStyle: LabelStyle {
+    private let make: (Configuration) -> AnyView
+
+    init<S: LabelStyle>(_ style: S) {
+        make = { AnyView(style.makeBody(configuration: $0)) }
+    }
+
+    func makeBody(configuration: Configuration) -> some View {
+        make(configuration)
     }
 }
