@@ -162,10 +162,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            "$DMG" build/updates/appcast.xml \
-            --title "Tunnelz ${VERSION}" \
-            --generate-notes
+          # A release created by hand for this tag (e.g. from the GitHub UI) gets the assets added.
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$DMG" build/updates/appcast.xml --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              "$DMG" build/updates/appcast.xml \
+              --title "Tunnelz ${VERSION}" \
+              --generate-notes
+          fi
 
       - name: Clean up signing material
         if: always()
